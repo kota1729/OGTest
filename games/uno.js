@@ -420,10 +420,47 @@ GameRegistry.uno = {
         gameState.pendingDrawCount = 0; gameState.pendingDrawType = null;
     },
 
+    // ドロー2/ワイルド4の重ねがけ中、手番が回ってきた相手が「残り1枚」で、
+    // かつその1枚がたまたま場に出せるカード（＝上がれてしまうカード）だった場合、
+    // そのまま出されると重ねがけ判定を一切経験せずに勝ち抜けてしまう抜け穴があるため、
+    // 手番が回った瞬間にこちらでチェックし、相手がそのカードで重ねがけを継続できない場合は
+    // 自動的に累積分のペナルティを渡してしまう。
+    checkForcedStackPenaltyOnTurnPass: function() {
+        if (!gameState.pendingDrawCount || gameState.pendingDrawCount <= 0) return;
+        const activePlayer = getActivePlayer();
+        if (!activePlayer) return;
+        const theirHand = gameState.hands[activePlayer.accId] || [];
+        if (theirHand.length !== 1) return;
+        if (!gameState.discardPile || gameState.discardPile.length === 0) return;
+
+        const theirCard = theirHand[0];
+        const topCard = gameState.discardPile[gameState.discardPile.length - 1];
+        const isPlayable = (theirCard.color === 'wild' || theirCard.color === gameState.currentSuit || theirCard.value === topCard.value);
+        if (!isPlayable) return;
+
+        // 重ねがけを正当に継続できるカード（同じ種類のDraw2 / WildDraw4）なら、
+        // そのまま出して上がる分には抜け穴には当たらないので見逃す。
+        const isValidContinuation =
+            (gameState.pendingDrawType === 'Draw2' && theirCard.value === 'Draw2') ||
+            (gameState.pendingDrawType === 'WildDraw4' && theirCard.value === 'WildDraw4');
+        if (isValidContinuation) return;
+
+        const multiplier = gameState.pendingDrawType === 'WildDraw4' ? 4 : 2;
+        const totalPenaltyCards = gameState.pendingDrawCount * multiplier;
+        for (let i = 0; i < totalPenaltyCards; i++) {
+            this.reshuffleDeckFromDiscard();
+            if (gameState.deck.length > 0) theirHand.push(gameState.deck.pop());
+        }
+        gameState.lastPlayedComboText = `${gameState.lastPlayedComboText} / ${activePlayer.name}さんは残り1枚のカードで重ねがけを継続できなかったため、累積で${totalPenaltyCards}枚を自動的に引きました`;
+        gameState.pendingDrawCount = 0;
+        gameState.pendingDrawType = null;
+    },
+
     selectWildColor: function(color) {
         gameState.currentSuit = color;
         document.getElementById('uno-color-selector').style.display = 'none';
         gameState.turnIndex = this.getNextPlayerIndex(1);
+        this.checkForcedStackPenaltyOnTurnPass();
         gameState.hasDrawnThisTurn = false;
         broadcast({ type: 'SYNC_GAME', state: gameState });
         syncGameUI();
@@ -446,6 +483,7 @@ GameRegistry.uno = {
         } else {
             gameState.turnIndex = this.getNextPlayerIndex(1);
         }
+        this.checkForcedStackPenaltyOnTurnPass();
         gameState.hasDrawnThisTurn = false;
         broadcast({ type: 'SYNC_GAME', state: gameState });
         syncGameUI();
