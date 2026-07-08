@@ -515,7 +515,7 @@
 
     document.getElementById('btn-create-room').onclick = () => {
         const name = document.getElementById('inp-create-name').value.trim();
-        const word = document.getElementById('inp-create-room').value.trim();
+        const word = document.getElementById('inp-create-room').value.trim().normalize('NFC');
         const countStr = document.getElementById('inp-create-count').value.trim();
         if(!name || !word || !countStr) { customAlert("すべての項目を入力してください。"); return; }
         if(!isHiraganaOnly(word)) { customAlert("合言葉はひらがなのみで入力してください。"); return; }
@@ -527,6 +527,7 @@
         baseRoomWord = btoa(encodeURIComponent(word)).replace(/=/g, "");
         roomMaxParticipants = count;
         isRoomCreator = true;
+        console.log('[GameRoom] 作成: 入力された合言葉=', JSON.stringify(word), ' → エンコード後=', baseRoomWord);
         document.getElementById('btn-create-room').disabled = true;
         document.getElementById('status-msg').textContent = "部屋を作成しています...";
         tryCreateRoom();
@@ -534,7 +535,7 @@
 
     document.getElementById('btn-join-room').onclick = () => {
         const name = document.getElementById('inp-join-name').value.trim();
-        const word = document.getElementById('inp-join-room').value.trim();
+        const word = document.getElementById('inp-join-room').value.trim().normalize('NFC');
         if(!name || !word) { customAlert("ニックネームと合言葉を入力してください。"); return; }
         if(!isHiraganaOnly(word)) { customAlert("合言葉はひらがなのみで入力してください。"); return; }
 
@@ -542,6 +543,7 @@
         myRoomWord = word;
         baseRoomWord = btoa(encodeURIComponent(word)).replace(/=/g, "");
         isRoomCreator = false;
+        console.log('[GameRoom] 参加: 入力された合言葉=', JSON.stringify(word), ' → エンコード後=', baseRoomWord);
         document.getElementById('btn-join-room').disabled = true;
         document.getElementById('status-msg').textContent = "部屋を探しています...";
         tryJoinRoom(1);
@@ -557,16 +559,21 @@
 
     function tryCreateRoom() {
         if(peer) peer.destroy();
+        console.log('[GameRoom] ホスト作成: baseRoomWord=', baseRoomWord, ' peerId=', `${baseRoomWord}-0`);
         peer = new Peer(`${baseRoomWord}-0`, { serialization: 'json', config: PEER_ICE_CONFIG });
 
         peer.on('open', (id) => {
+            console.log('[GameRoom] ホストpeer接続完了 id=', id);
             myId = id;
             enterLobby();
         });
         peer.on('connection', (conn) => {
+            console.log('[GameRoom] 参加者から接続要求あり:', conn.peer);
             setupConnection(conn, false);
         });
+        peer.on('disconnected', () => console.warn('[GameRoom] ホストpeerがシグナリングサーバーから切断されました'));
         peer.on('error', (err) => {
+            console.error('[GameRoom] ホストpeerエラー:', err.type, err);
             if (err.type === 'unavailable-id') {
                 customAlert("この合言葉の部屋はすでに存在します。「ルームに参加する」から入室してください。");
             } else {
@@ -579,36 +586,59 @@
 
     function tryJoinRoom(index) {
         if(peer) peer.destroy();
+        console.log('[GameRoom] 参加試行: baseRoomWord=', baseRoomWord, ' peerId=', `${baseRoomWord}-${index}`, ' host候補=', `${baseRoomWord}-0`);
         peer = new Peer(`${baseRoomWord}-${index}`, { serialization: 'json', config: PEER_ICE_CONFIG });
 
         peer.on('open', (id) => {
+            console.log('[GameRoom] 参加者peer接続完了 id=', id);
             myId = id;
             let hostConnectedFlag = false;
+            let retryAttempted = false;
 
-            const hostConn = peer.connect(`${baseRoomWord}-0`);
-            setupConnection(hostConn, true);
-            hostConn.on('open', () => {
-                hostConnectedFlag = true;
-                if (joinHostTimeoutTimer) { clearTimeout(joinHostTimeoutTimer); joinHostTimeoutTimer = null; }
-                enterLobby();
-            });
+            const attemptHostConnection = () => {
+                console.log('[GameRoom] ホストへ接続試行:', `${baseRoomWord}-0`);
+                const hostConn = peer.connect(`${baseRoomWord}-0`);
+                setupConnection(hostConn, true);
+                hostConn.on('open', () => {
+                    console.log('[GameRoom] ホストへの接続が確立しました');
+                    hostConnectedFlag = true;
+                    if (joinHostTimeoutTimer) { clearTimeout(joinHostTimeoutTimer); joinHostTimeoutTimer = null; }
+                    enterLobby();
+                });
+                hostConn.on('error', (e) => console.error('[GameRoom] ホスト接続エラー:', e));
+                hostConn.on('close', () => console.warn('[GameRoom] ホスト接続がクローズされました'));
+            };
+            attemptHostConnection();
 
             for (let i = 1; i < index; i++) {
                 setupConnection(peer.connect(`${baseRoomWord}-${i}`), true);
             }
 
-            joinHostTimeoutTimer = setTimeout(() => {
-                if (!hostConnectedFlag) {
-                    customAlert("部屋が見つかりませんでした。合言葉をご確認のうえ、もう一度お試しください。");
-                    if (peer) { peer.destroy(); peer = null; }
-                    resetToModeSelect();
-                }
-            }, 7000);
+            // ホストへの接続が一定時間内に確立しない場合の処理。
+            // 回線状況（特に無料TURNリレー経由の接続確立に時間がかかるケース）を考慮し、
+            // すぐに「見つかりませんでした」とはせず、一度だけ自動再試行してから最終判定する。
+            const waitForHost = (timeoutMs) => {
+                joinHostTimeoutTimer = setTimeout(() => {
+                    if (hostConnectedFlag) return;
+                    if (!retryAttempted) {
+                        retryAttempted = true;
+                        document.getElementById('status-msg').textContent = "部屋を探しています...(接続を再試行中)";
+                        attemptHostConnection();
+                        waitForHost(7000);
+                    } else {
+                        customAlert("部屋が見つかりませんでした。合言葉をご確認のうえ、もう一度お試しください。\n※電波状況や回線が不安定だと接続に失敗することがあります。Wi-Fiに接続した状態でも改善しない場合は、合言葉の入力（ひらがな）が完全に一致しているかもご確認ください。");
+                        if (peer) { peer.destroy(); peer = null; }
+                        resetToModeSelect();
+                    }
+                }, timeoutMs);
+            };
+            waitForHost(8000);
         });
         peer.on('connection', (conn) => {
             setupConnection(conn, false);
         });
         peer.on('error', (err) => {
+            console.error('[GameRoom] 参加者peerエラー:', err.type, err);
             if (err.type === 'unavailable-id') {
                 tryJoinRoom(index + 1);
             } else {
