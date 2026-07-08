@@ -19,16 +19,25 @@ GameRegistry.uno = {
             <div id="uno-playing-area">
                 <div class="direction-indicator" id="uno-direction">順番：時計回り 🔄</div>
                 <div class="pending-draw-indicator" id="pending-draw-indicator" style="display:none;"></div>
-                <div class="play-area">
-                    <div style="text-align:center;">
-                        <div style="font-size:0.65rem; margin-bottom:2px; color:#aaa;">山札</div>
-                        <div class="uno-card uno-card-back" id="uno-deck" onclick="GameRegistry.uno.drawCard()"></div>
+
+                <div class="uno-table-wrapper" id="uno-table-wrapper">
+                    <div class="uno-seat uno-seat-top" id="uno-seat-top" style="display:none;"></div>
+                    <div class="uno-seat uno-seat-left" id="uno-seat-left" style="display:none;"></div>
+                    <div class="uno-seat uno-seat-right" id="uno-seat-right" style="display:none;"></div>
+
+                    <div class="play-area" id="uno-play-area">
+                        <div style="text-align:center;">
+                            <div style="font-size:0.65rem; margin-bottom:2px; color:#aaa;">山札</div>
+                            <div class="uno-card uno-card-back" id="uno-deck" onclick="GameRegistry.uno.drawCard()"></div>
+                        </div>
+                        <div style="text-align:center; display: flex; flex-direction: column; align-items: center;">
+                            <div style="font-size:0.65rem; margin-bottom:2px; color:#aaa;">場のカード</div>
+                            <div class="uno-card" id="uno-center-card">-</div>
+                            <div class="uno-history-text" id="uno-card-history" style="display:none;"></div>
+                        </div>
                     </div>
-                    <div style="text-align:center; display: flex; flex-direction: column; align-items: center;">
-                        <div style="font-size:0.65rem; margin-bottom:2px; color:#aaa;">場のカード</div>
-                        <div class="uno-card" id="uno-center-card">-</div>
-                        <div class="uno-history-text" id="uno-card-history" style="display:none;"></div>
-                    </div>
+
+                    <div class="uno-seat uno-seat-bottom-label" id="uno-seat-bottom-label" style="display:none;"></div>
                 </div>
                 <div class="color-selector" id="uno-color-selector">
                     <div class="color-btn" style="background:var(--uno-red);" onclick="GameRegistry.uno.selectWildColor('red')"></div>
@@ -102,7 +111,9 @@ GameRegistry.uno = {
     hostGame: function() {
         if(sortedPlayers.length < 2) { customAlert("2人以上のプレイヤーが必要です。"); return; }
         gameState.isStarted = true; gameState.gameType = 'uno';
-        gameState.roster = sortedPlayers.map(p => ({ accId: p.accId, name: p.name }));
+        // 座席（roster配列の並び順）をランダム化。ゲームルールには影響しない、見た目上の座り位置決定のみ。
+        const rosterBase = sortedPlayers.map(p => ({ accId: p.accId, name: p.name }));
+        gameState.roster = this.shuffleArrayEqually(rosterBase);
         gameState.deck = this.createStandardUnoDeck(); gameState.discardPile = []; gameState.hands = {};
         gameState.turnIndex = Math.floor(Math.random() * gameState.roster.length); gameState.direction = 1; gameState.hasDrawnThisTurn = false;
         gameState.unoCalled = {}; gameState.pendingDrawCount = 0; gameState.pendingDrawType = null;
@@ -506,6 +517,87 @@ GameRegistry.uno = {
         return idx;
     },
 
+    buildMiniCardFan: function(count) {
+        const shown = Math.min(count, 5);
+        let html = '<div class="uno-mini-fan">';
+        for (let i = 0; i < shown; i++) {
+            html += `<div class="uno-mini-card-back"></div>`;
+        }
+        html += '</div>';
+        return html;
+    },
+
+    // 2〜4人プレイ時のみ、雀卓のようにみんなで囲む座席レイアウトを描画する。
+    // ルールには一切関与せず、あくまで見た目の配置のみを担当する。
+    renderTableView: function(activePlayer) {
+        const wrapper = document.getElementById('uno-table-wrapper');
+        if (!wrapper) return;
+        const seatTop = document.getElementById('uno-seat-top');
+        const seatLeft = document.getElementById('uno-seat-left');
+        const seatRight = document.getElementById('uno-seat-right');
+        const seatBottom = document.getElementById('uno-seat-bottom-label');
+
+        const roster = gameState.roster || [];
+        const n = roster.length;
+        const myIdx = roster.findIndex(p => p.accId === myAccountId);
+        const useTableMode = (n >= 2 && n <= 4 && myIdx !== -1);
+
+        wrapper.classList.toggle('table-mode', useTableMode);
+
+        if (!useTableMode) {
+            [seatTop, seatLeft, seatRight, seatBottom].forEach(el => { if (el) el.style.display = 'none'; });
+            return;
+        }
+
+        const connectedAccIds = new Set(sortedPlayers.map(p => p.accId));
+
+        const buildSeatData = (player) => {
+            const cnt = (gameState.hands[player.accId] || []).length;
+            const isTurn = activePlayer && activePlayer.accId === player.accId;
+            const isConnected = connectedAccIds.has(player.accId);
+            const html = `
+                <div class="uno-seat-cards">${this.buildMiniCardFan(cnt)}</div>
+                <div class="uno-seat-info">
+                    <span class="uno-seat-name">${player.name}</span>
+                    <span class="uno-seat-count">${cnt}枚</span>
+                    ${cnt === 1 ? '<span class="uno-seat-warning">UNO!</span>' : ''}
+                    ${!isConnected ? '<span class="uno-seat-disconnect">切断中</span>' : ''}
+                </div>`;
+            return { isTurn, isConnected, html };
+        };
+
+        // 自分より後の順番のプレイヤーから順に、自分を除いた他プレイヤーを並べる
+        const others = [];
+        for (let i = 1; i < n; i++) {
+            others.push(roster[(myIdx + i) % n]);
+        }
+
+        const slotMap = {
+            2: [seatTop],
+            3: [seatLeft, seatRight],
+            4: [seatLeft, seatTop, seatRight]
+        };
+        const slots = slotMap[n];
+
+        [seatTop, seatLeft, seatRight].forEach(el => { if (el) el.style.display = 'none'; });
+
+        others.forEach((player, i) => {
+            const seatEl = slots[i];
+            if (!seatEl) return;
+            const d = buildSeatData(player);
+            seatEl.className = `uno-seat ${d.isTurn ? 'active-turn' : ''} ${!d.isConnected ? 'disconnected' : ''}`;
+            seatEl.innerHTML = d.html;
+            seatEl.style.display = 'flex';
+        });
+
+        if (seatBottom) {
+            const d = buildSeatData(roster[myIdx]);
+            seatBottom.className = `uno-seat uno-seat-bottom-label me ${d.isTurn ? 'active-turn' : ''}`;
+            seatBottom.innerHTML = d.html;
+            seatBottom.style.display = 'flex';
+        }
+    },
+
     syncUI: function() {
         // UI表示切り替え
         document.getElementById('game-title-label').textContent = "UNO プレイフィールド";
@@ -537,6 +629,7 @@ GameRegistry.uno = {
         document.getElementById('uno-winner-overlay').style.display = 'none';
         document.getElementById('uno-playing-area').style.display = 'block';
         document.getElementById('uno-direction').textContent = gameState.direction === 1 ? "順番：時計回り 🔄" : "順番：反時計回り ↩️";
+        this.renderTableView(activePlayer);
         
         const topCard = gameState.discardPile[gameState.discardPile.length - 1];
         const centerView = document.getElementById('uno-center-card');
