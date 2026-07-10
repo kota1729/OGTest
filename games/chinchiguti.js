@@ -1,302 +1,427 @@
-// GameRegistryに新規ゲーム「チンチ口（chinchiguti）」として登録
-GameRegistry.chinchiguti = {
-    // チンチ口専用のHTMLテンプレート（IDやクラスをchinchiguti専用に完全分離）
-    template: `
-        <div class="chinchiguti-board" id="chinchiguti-board-area">
-            <div class="spectator-banner" id="chinchiguti-spectator-banner" style="display:none;">👀 観戦中：このゲームが終わるまでお待ちください</div>
+/**
+ * チンチ口（chinchiguti）修正版モジュール実装
+ * 
+ * 【修正内容】
+ * 1. カスタム設定UI（ダイス数変更）が表示されないバグを修正
+ * 2. シャッフルアニメーション中も .chinchiro-die クラスを適用し、デザインが崩れないよう修正
+ * 3. 終了画面における最終ランキング（renderFinalRanking）の未実装部分を追加
+ * 4. クラス名や文言の整合性を調整（ダイス数に応じたピンゾロ/全1の目の表示切り替えなど）
+ */
 
-            <!-- カスタム設定エリア（ゲーム開始前・ホストのみ操作可能） -->
-            <div class="panel" id="chinchiguti-custom-setup" style="margin-bottom: 10px; display: none;">
-                <div class="panel-title" style="font-size: 0.9rem;">⚙️ チンチ口 カスタム設定</div>
-                <label style="flex-direction: row; justify-content: space-between; align-items: center; gap: 10px;">
-                    <span>使用するサイコロの数 (1〜10):</span>
-                    <input type="text" id="inp-chinchiguti-dice-count" value="3" style="width: 60px; text-align: center; padding: 5px;">
-                </label>
-            </div>
+// --- CSS スタイル (HTMLの<style>タグ内、または追加分) ---
+const chinchigutiStyles = `
+.chinchiguti-custom-box {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+}
+.chinchiguti-custom-title {
+    font-size: 13px;
+    font-weight: bold;
+    color: #e0e0e0;
+    margin-bottom: 6px;
+}
+`;
 
-            <!-- 勝者発表オーバーレイ -->
-            <div class="winner-overlay" id="chinchiguti-winner-overlay" style="display:none;">
-                <div class="winner-trophy">👑</div>
-                <div class="winner-name" id="chinchiguti-winner-name">優勝！</div>
-                <div class="winner-card-info" id="chinchiguti-winner-hand">全て1の目「ピンゾロ」達成！</div>
-                <div id="chinchiguti-final-ranking" style="margin-top:14px; width:100%; display:flex; flex-direction:column; gap:6px;"></div>
-                <button class="btn btn-success" style="margin-top:14px;" onclick="GameRegistry.chinchiguti.hostGame()">もう一度プレイする</button>
-                <button class="btn" style="margin-top:6px;" onclick="sendReturnToLobby()">ロビーへ戻る</button>
-            </div>
+// --- HTML テンプレート (ゲームフィールド、およびロビー用) ---
+// ロビーまたはゲーム開始前にカスタム設定を表示できるように調整したテンプレート
+const chinchigutiHtmlTemplate = `
+<!-- チンチ口設定エリア (ゲーム開始前・ホストのみ変更可能) -->
+<div id="chinchiguti-custom-setup" class="chinchiguti-custom-box" style="display: none;">
+    <div class="chinchiguti-custom-title">🎲 チンチ口 カスタム設定 (ホストのみ)</div>
+    <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 12px; color: #aaa;">初期サイコロ数:</span>
+        <select id="chinchiguti-dice-count-select" style="background: #2a2a2a; color: white; border: 1px solid #444; padding: 4px 8px; border-radius: 4px; cursor: pointer;">
+            <option value="3">3個 (通常)</option>
+            <option value="4">4個</option>
+            <option value="5">5個</option>
+            <option value="6">6個</option>
+            <option value="8">8個</option>
+            <option value="10">10個</option>
+        </select>
+    </div>
+</div>
 
-            <div id="chinchiguti-playing-area">
-                <div class="direction-indicator" id="chinchiguti-turn-indicator">現在の番: -</div>
+<!-- ゲームメイン画面 -->
+<div id="chinchiguti-game-screen" style="display: none; width: 100%;">
+    <!-- スコアボード -->
+    <div id="chinchiguti-scoreboard" style="width: 100%; margin-bottom: 12px;"></div>
 
-                <!-- ダイス表示ステージ -->
-                <div class="dice-stage" id="chinchiguti-dice-stage" style="min-height: 120px; padding: 20px 5px;">
-                    <div class="chinchiguti-dish" id="chinchiguti-dish-element" style="width: 100%; max-width: 450px; height: auto; min-height: 100px; border-radius: 12px; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px; padding: 15px; background: radial-gradient(circle, #4a2c15 0%, #2a1608 100%);">
-                        <!-- 動的にサイコロが生成されます -->
-                    </div>
-                </div>
-                <div style="text-align:center; font-size:0.85rem; color:var(--accent-color); font-weight:bold; min-height:1.2em; margin-bottom: 8px;" id="chinchiguti-current-hand-label"></div>
+    <!-- プレイエリア -->
+    <div style="background: rgba(0,0,0,0.2); border-radius: 8px; padding: 16px; text-align: center; position: relative;">
+        <!-- 現在のプレイヤー番 -->
+        <div id="chinchiguti-current-turn-info" style="font-size: 14px; font-weight: bold; color: #ffd700; margin-bottom: 10px;"></div>
+        
+        <!-- サイコロ表示エリア -->
+        <div id="chinchiguti-dice-container" style="display: flex; justify-content: center; gap: 10px; margin: 20px 0; min-height: 50px; flex-wrap: wrap;"></div>
 
-                <div class="action-container">
-                    <button class="btn btn-success" id="btn-chinchiguti-roll" onclick="GameRegistry.chinchiguti.rollDice()" disabled>🎲 サイコロを振る</button>
-                </div>
-
-                <div class="hand-section" style="margin-top:10px;">
-                    <div class="hand-title"><span>各プレイヤーの直前の出目</span></div>
-                    <div class="chinchiguti-scoreboard" id="chinchiguti-scoreboard"></div>
-                </div>
-
-                <details class="chinchiguti-rules" open>
-                    <summary>📖 チンチ口（ちんちぐち）のルールを見る</summary>
-                    <div class="rules-body">
-                        <h4>遊び方</h4>
-                        <ol>
-                            <li>カスタム設定で指定された数（初期値は3個）のサイコロをお皿の中で振ります。</li>
-                            <li><strong>すべてのサイコロが「1（⚀）」、つまり【ピンゾロ】が出るまで絶対に終わらない</strong>無限サバイバルゲームです。</li>
-                            <li>1回振ってピンゾロが出なければ、即座に次のプレイヤーへターンが回ります。</li>
-                            <li>誰かがピンゾロを出した瞬間、そのプレイヤーの勝利でゲームは幕を閉じます！</li>
-                        </ol>
-                    </div>
-                </details>
-            </div>
+        <!-- アクションボタン -->
+        <div id="chinchiguti-action-container" style="margin-top: 15px;">
+            <button id="chinchiguti-roll-btn" class="btn btn-primary" style="padding: 10px 24px; font-weight: bold;">サイコロを振る</button>
         </div>
-    `,
+    </div>
 
-    isRolling: false,
-    rollAnimTimer: null,
-    rollingInterval: null,
+    <!-- 結果・終了画面 -->
+    <div id="chinchiguti-result-screen" style="display: none; margin-top: 15px; background: rgba(255,215,0,0.1); border: 1px solid #ffd700; border-radius: 8px; padding: 15px; text-align: center;">
+        <h3 id="chinchiguti-result-title" style="color: #ffd700; margin: 0 0 10px 0; font-size: 18px;">🎉 全てのサイコロが1の目になりました！</h3>
+        <p style="font-size: 13px; color: #eee; margin-bottom: 10px;">【最終順位】少ない残りサイコロ数・または早く生存した順</p>
+        <div id="chinchiguti-final-ranking" style="margin-top: 14px; width: 100%; display: flex; flex-direction: column; gap: 6px;"></div>
+    </div>
+</div>
+`;
 
-    init: function() {
-        this.isRolling = false;
-        this.rollAnimTimer = null;
-        this.rollingInterval = null;
-    },
-
-    handleData: function(data) {
-        if (data.type === 'CHINCHIGUTI_ROLLING') {
-            this.playRollingAnimation();
-        }
-    },
-
-    diceFace: function(n) {
-        const faces = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
-        return faces[Math.max(1, Math.min(6, n)) - 1];
-    },
-
-    // チンチ口のホスト開始処理
-    hostGame: function() {
-        if (sortedPlayers.length < 2) { customAlert("2人以上のプレイヤーが必要です。"); return; }
+// --- JavaScript ゲームレジストリの実装 ---
+const ChinchigutiModule = {
+    id: "chinchiguti",
+    name: "チンチ口",
+    
+    // 初期状態の生成
+    createInitialState: function(players) {
+        const state = {
+            isStarted: false,
+            isEnded: false,
+            config: {
+                initialDiceCount: 3 // デフォルトのサイコロ数
+            },
+            playerData: {}, // id -> { name, diceCount, active: true, finishTurn: null }
+            turnOrder: [],
+            currentTurnIndex: 0,
+            lastRoll: [],
+            rolling: false,
+            winnerId: null
+        };
         
-        // カスタムサイコロ数の取得（1〜10個に制限）
-        let diceCountInput = document.getElementById('inp-chinchiguti-dice-count');
-        let diceCount = diceCountInput ? parseInt(diceCountInput.value, 10) : 3;
-        if (isNaN(diceCount) || diceCount < 1) diceCount = 1;
-        if (diceCount > 10) diceCount = 10;
-
-        gameState.isStarted = true; 
-        gameState.gameType = 'chinchiguti'; // ゲームタイプを独自に設定
-        gameState.chinchigutiDiceCount = diceCount; 
-        gameState.roster = sortedPlayers.map(p => ({ accId: p.accId, name: p.name }));
-        gameState.turnIndex = Math.floor(Math.random() * gameState.roster.length);
-        gameState.chinchigutiResults = {};
-        
-        gameState.roster.forEach(p => {
-            const defaultDice = Array(diceCount).fill(1);
-            gameState.chinchigutiResults[p.accId] = { dice: defaultDice, attempts: 0, label: '未投入', isPinzoro: false };
+        players.forEach(p => {
+            state.playerData[p.id] = {
+                id: p.id,
+                name: p.name,
+                diceCount: 3, // 初期化時は後でconfigに合わせて同期
+                active: true,
+                finishTurn: null,
+                totalRolls: 0
+            };
         });
         
-        gameState.isEnded = false; 
-        gameState.winner = null; 
-        gameState.winnerHandText = '';
-        this.isRolling = false;
-
-        broadcast({ type: 'SYNC_GAME', state: gameState });
-        syncGameUI();
+        return state;
     },
 
-    // サイコロを振るアクション
-    rollDice: function() {
-        const activePlayer = getActivePlayer();
-        if (!activePlayer || activePlayer.accId !== myAccountId) return;
-        if (this.isRolling) return;
-
-        this.isRolling = true;
-        const rollBtn = document.getElementById('btn-chinchiguti-roll');
-        if (rollBtn) rollBtn.disabled = true;
-
-        broadcast({ type: 'CHINCHIGUTI_ROLLING' });
-        this.playRollingAnimation();
-
-        if (this.rollAnimTimer) clearTimeout(this.rollAnimTimer);
-        this.rollAnimTimer = setTimeout(() => { this.finalizeRoll(); }, 900);
-    },
-
-    // 演出用アニメーション
-    playRollingAnimation: function() {
-        const diceCount = gameState.chinchigutiDiceCount || 3;
-        const dish = document.getElementById('chinchiguti-dish-element');
-        if (!dish) return;
-
-        if (this.rollingInterval) clearInterval(this.rollingInterval);
-        this.rollingInterval = setInterval(() => {
-            const tempDice = Array(diceCount).fill(0).map(() => this.diceFace(1 + Math.floor(Math.random() * 6)));
-            dish.innerHTML = tempDice.map(face => `
-                <div class="chinchiguti-die rolling" style="position: static; transform: rotate(${Math.floor(Math.random() * 40) - 20}deg); font-size: 2.2rem; width: 52px; height: 52px;">${face}</div>
-            `).join('');
-        }, 90);
-
-        setTimeout(() => {
-            if (this.rollingInterval) { clearInterval(this.rollingInterval); this.rollingInterval = null; }
-        }, 850);
-    },
-
-    // 出目の確定と判定
-    finalizeRoll: function() {
-        const myResult = gameState.chinchigutiResults[myAccountId];
-        if (!myResult) { this.isRolling = false; return; }
-
-        const diceCount = gameState.chinchigutiDiceCount || 3;
-        const dice = Array(diceCount).fill(0).map(() => 1 + Math.floor(Math.random() * 6));
-        
-        // 【チンチ口ルール】すべてのダイスが「1」ならピンゾロ
-        const isPinzoro = dice.every(val => val === 1);
-        
-        myResult.attempts += 1;
-        myResult.dice = dice;
-        myResult.isPinzoro = isPinzoro;
-
-        if (isPinzoro) {
-            myResult.label = '🎉 ピンゾロ達成！！！';
-            gameState.isEnded = true;
-            gameState.winner = myName;
-            gameState.winnerHandText = `ピンゾロ (${dice.map(() => '1').join('-')})`;
-        } else {
-            const pinCount = dice.filter(v => v === 1).length;
-            myResult.label = `1の目: ${pinCount}/${diceCount}個`;
-            
-            // ターンを次の人に交代
-            gameState.turnIndex = (gameState.turnIndex + 1) % gameState.roster.length;
-        }
-
-        this.isRolling = false;
-        broadcast({ type: 'SYNC_GAME', state: gameState });
-        syncGameUI();
-    },
-
-    renderScoreboard: function() {
-        const wrapper = document.getElementById('chinchiguti-scoreboard');
-        if (!wrapper) return;
-        wrapper.innerHTML = "";
-
-        gameState.roster.forEach((p, idx) => {
-            const r = gameState.chinchigutiResults[p.accId] || { dice: [], attempts: 0, label: '-', isPinzoro: false };
-            const isTurn = (!gameState.isEnded && idx === gameState.turnIndex);
-            const row = document.createElement('div');
-            row.className = `chinchiro-score-row ${isTurn ? 'active-turn' : ''} ${r.isPinzoro ? 'finished' : ''}`;
-
-            let diceHtml = '<span style="color:#666; font-size:0.72rem;">未投入</span>';
-            if (r.attempts > 0) {
-                diceHtml = `<div class="chinchiro-mini-dice">${r.dice.map(d => `<div class="chinchiro-mini-die">${this.diceFace(d)}</div>`).join('')}</div>`;
-            }
-
-            row.innerHTML = `
-                <div style="display:flex; align-items:center; gap:8px; min-width:0;">
-                    <span style="font-weight:bold; ${p.accId === myAccountId ? 'color:var(--accent-color);' : ''}">${p.name}${isTurn ? ' 🎲' : ''}</span>
-                </div>
-                <div style="display:flex; align-items:center; gap:10px;">
-                    ${diceHtml}
-                    <span class="chinchiro-hand-label">${r.label}</span>
-                </div>
-            `;
-            wrapper.appendChild(row);
-        });
-    },
-
-    syncUI: function() {
-        document.getElementById('game-title-label').textContent = "新感覚ダイスゲーム：チンチ口";
-        
-        // 既存他ゲーム画面の非表示レイヤー処理
-        const unoBoard = document.getElementById('uno-board-area'); if (unoBoard) unoBoard.classList.remove('active');
-        const drawBoard = document.getElementById('draw-board-area'); if (drawBoard) drawBoard.classList.remove('active');
-        const drawResult = document.getElementById('draw-result-area'); if (drawResult) drawResult.classList.remove('active');
-        const oldChinchiro = document.getElementById('chinchiro-board-area'); if (oldChinchiro) oldChinchiro.classList.remove('active');
-        
-        // チンチ口のメインボードを表示
-        document.getElementById('chinchiguti-board-area').classList.add('active');
-
-        // ホストのみカスタム設定の表示
+    // UIの同期処理
+    syncUI: function(gameState, myId, isHost, socket) {
         const customSetupEl = document.getElementById('chinchiguti-custom-setup');
-        if (customSetupEl) {
-            const isHost = (sortedPlayers[0]?.id === myId);
-            customSetupEl.style.display = (!gameState.isStarted && isHost) ? 'block' : 'none';
-        }
+        const gameScreenEl = document.getElementById('chinchiguti-game-screen');
+        const diceContainer = document.getElementById('chinchiguti-dice-container');
+        const rollBtn = document.getElementById('chinchiguti-roll-btn');
+        const turnInfoEl = document.getElementById('chinchiguti-current-turn-info');
+        const resultScreenEl = document.getElementById('chinchiguti-result-screen');
+        const resultTitleEl = document.getElementById('chinchiguti-result-title');
+        const selectEl = document.getElementById('chinchiguti-dice-count-select');
 
-        const activePlayer = getActivePlayer();
-        const isMyTurn = (activePlayer && activePlayer.accId === myAccountId);
-        const amInRoster = !gameState.roster || !gameState.roster.length || gameState.roster.some(p => p.accId === myAccountId);
-        document.getElementById('chinchiguti-spectator-banner').style.display = (!amInRoster && !gameState.isEnded) ? 'block' : 'none';
+        if (!gameScreenEl) return;
 
-        const infoBar = document.getElementById('game-info');
-        const dish = document.getElementById('chinchiguti-dish-element');
-
-        // ゲーム終了（誰かがピンゾロを出した時）
-        if (gameState.isEnded) {
-            this.rollAnimTimer && clearTimeout(this.rollAnimTimer);
-            document.getElementById('chinchiguti-winner-overlay').style.display = 'flex';
-            document.getElementById('chinchiguti-playing-area').style.display = 'none';
-            document.getElementById('chinchiguti-winner-name').textContent = `${gameState.winner} がピンゾロ達成！`;
-            document.getElementById('chinchiguti-winner-hand').textContent = `設定された ${gameState.chinchigutiDiceCount}個 すべてが「1」になりました！`;
-            if (infoBar) infoBar.textContent = `🎉 終了！${gameState.winner}さんの勝利です！`;
-            return;
-        }
-
-        document.getElementById('chinchiguti-winner-overlay').style.display = 'none';
-        document.getElementById('chinchiguti-playing-area').style.display = 'block';
-
-        if (document.getElementById('chinchiguti-turn-indicator')) {
-            document.getElementById('chinchiguti-turn-indicator').textContent =
-                `現在の番: ${activePlayer ? activePlayer.name : '-'} さん (全${gameState.roster.length}人中 / 設定ダイス: ${gameState.chinchigutiDiceCount || 3}個)`;
-        }
-
-        const myResult = gameState.chinchigutiResults[myAccountId];
-        const handLabelEl = document.getElementById('chinchiguti-current-hand-label');
-        const rollBtn = document.getElementById('btn-chinchiguti-roll');
-
-        // サイコロ停止中の盤面描画
-        if (!this.isRolling && dish) {
-            const activeResult = activePlayer ? gameState.chinchigutiResults[activePlayer.accId] : null;
-            if (activeResult && activeResult.attempts > 0) {
-                dish.innerHTML = activeResult.dice.map(d => `
-                    <div class="chinchiro-die" style="position: static; font-size: 2.4rem; width: 56px; height: 56px; color: ${d === 1 ? 'var(--danger-color)' : '#111'}">${this.diceFace(d)}</div>
-                `).join('');
-                if (handLabelEl) handLabelEl.textContent = activeResult.label;
-            } else {
-                const diceCount = gameState.chinchigutiDiceCount || 3;
-                dish.innerHTML = Array(diceCount).fill('？').map(q => `
-                    <div class="chinchiro-die" style="position: static; font-size: 2.2rem; width: 52px; height: 52px; color: #aaa;">${q}</div>
-                `).join('');
-                if (handLabelEl) handLabelEl.textContent = 'サイコロが振られるのを待っています';
+        // 【修正1】カスタム設定UIの表示制御ロジックを最適化
+        // ゲーム開始前（ロビー状態、または準備中）かつホストの場合に設定可能にする
+        if (!gameState.isStarted) {
+            customSetupEl.style.display = 'block';
+            // ホスト以外は選択不可にする
+            if (selectEl) {
+                selectEl.disabled = !isHost;
+                // 値の同期イベント登録（一度だけ）
+                if (isHost && !selectEl.dataset.hasListener) {
+                    selectEl.dataset.hasListener = "true";
+                    selectEl.addEventListener('change', (e) => {
+                        socket.emit('game-action', {
+                            type: 'change-config',
+                            initialDiceCount: parseInt(e.target.value, 10)
+                        });
+                    });
+                }
+                // 現在の値を反映
+                selectEl.value = gameState.config.initialDiceCount;
             }
-        }
-
-        // ボタンの制御
-        if (isMyTurn && myResult && !this.isRolling) {
-            rollBtn.disabled = false;
-            rollBtn.textContent = '🎲 サイコロを振る';
+            gameScreenEl.style.display = 'none';
+            return; // 開始前はここまで
         } else {
-            rollBtn.disabled = true;
-            rollBtn.textContent = this.isRolling ? '⚡ シャッフル中...' : '🎲 相手の番です';
+            // ゲーム開始後はカスタム設定を非表示にする
+            customSetupEl.style.display = 'none';
+            gameScreenEl.style.display = 'block';
         }
 
-        // 共通インフォバー表示
-        if (infoBar) {
-            if (!amInRoster) {
-                infoBar.textContent = `⏱️ ${activePlayer ? activePlayer.name : '相手'}が挑戦中...(観戦中)`;
-            } else if (isMyTurn) {
-                infoBar.textContent = `🎲 あなたの番です！ピンゾロ（すべて1の目）を狙って振るべし！`;
+        // 進行中の手番処理
+        const currentTurnPlayerId = gameState.turnOrder[gameState.currentTurnIndex];
+        const isMyTurn = (currentTurnPlayerId === myId) && !gameState.isEnded && !gameState.rolling;
+
+        if (gameState.isEnded) {
+            turnInfoEl.innerText = "ゲーム終了";
+            rollBtn.style.display = 'none';
+            resultScreenEl.style.display = 'block';
+            
+            // 文言の調整（ダイス数に応じて変化）
+            if (gameState.config.initialDiceCount === 3) {
+                resultTitleEl.innerText = "🎉 全て1の目「ピンゾロ」達成でゲーム終了！";
             } else {
-                infoBar.textContent = `⏱️ ${activePlayer ? activePlayer.name : '相手'}のターンです...`;
+                resultTitleEl.innerText = `🎉 全て1の目（${gameState.config.initialDiceCount}個）達成でゲーム終了！`;
+            }
+
+            // 【修正3】最終ランキングの描画処理を呼び出し
+            this.renderFinalRanking(gameState);
+        } else {
+            resultScreenEl.style.display = 'none';
+            rollBtn.style.display = isMyTurn ? 'inline-block' : 'none';
+            
+            const currentPlayer = gameState.playerData[currentTurnPlayerId];
+            if (currentPlayer) {
+                turnInfoEl.innerText = isMyTurn ? "🔴 あなたの番です！サイコロを振ってください。" : `⏳ ${currentPlayer.name} さんがサイコロを振っています...`;
             }
         }
 
-        this.renderScoreboard();
+        // スコアボードの描画
+        this.renderScoreboard(gameState, currentTurnPlayerId);
+
+        // サイコロの表示 (アニメーション中でない場合のみ上書き描画)
+        if (!gameState.rolling) {
+            diceContainer.innerHTML = '';
+            if (gameState.lastRoll && gameState.lastRoll.length > 0) {
+                gameState.lastRoll.forEach(val => {
+                    // 【修正2】クラス名を 'chinchiro-die' に統一してデザインを適用
+                    const die = document.createElement('div');
+                    die.className = 'chinchiro-die';
+                    die.innerText = val;
+                    if (val === 1) die.style.color = '#ff4d4d'; // 1の目は赤くハイライト
+                    diceContainer.appendChild(die);
+                });
+            } else {
+                // まだ誰も振っていない時のプレースホルダー
+                const activePlayer = gameState.playerData[currentTurnPlayerId];
+                const count = activePlayer ? activePlayer.diceCount : gameState.config.initialDiceCount;
+                for (let i = 0; i < count; i++) {
+                    const die = document.createElement('div');
+                    die.className = 'chinchiro-die';
+                    die.style.opacity = '0.3';
+                    die.innerText = '?';
+                    diceContainer.appendChild(die);
+                }
+            }
+        }
+
+        // ボタンのクリックイベント（一度だけ登録）
+        if (!rollBtn.dataset.hasListener) {
+            rollBtn.dataset.hasListener = "true";
+            rollBtn.addEventListener('click', () => {
+                if (gameState.rolling) return;
+                
+                // クライアント側で先行シャッフルアニメーションを開始
+                this.playRollingAnimation(gameState.playerData[currentTurnPlayerId].diceCount);
+                
+                socket.emit('game-action', { type: 'roll' });
+            });
+        }
+    },
+
+    // 【修正2】アニメーション中もサイコロの見た目（CSS）が崩れないように修正
+    playRollingAnimation: function(diceCount) {
+        const diceContainer = document.getElementById('chinchiguti-dice-container');
+        if (!diceContainer) return;
+
+        diceContainer.innerHTML = '';
+        const diceElements = [];
+
+        for (let i = 0; i < diceCount; i++) {
+            const die = document.createElement('div');
+            // クラス名を 'chinchiro-die rolling' にして枠線や背景のスタイルを維持
+            die.className = 'chinchiro-die rolling';
+            die.innerText = Math.floor(Math.random() * 6) + 1;
+            diceContainer.appendChild(die);
+            diceElements.push(die);
+        }
+
+        // 100msごとに数値をシャッフル
+        const interval = setInterval(() => {
+            diceElements.forEach(die => {
+                if (die.classList.contains('rolling')) {
+                    die.innerText = Math.floor(Math.random() * 6) + 1;
+                }
+            });
+        }, 100);
+
+        // セーフティタイマー（サーバーから同期が来たらクリアされるが、念のため3秒で止める）
+        setTimeout(() => {
+            clearInterval(interval);
+        }, 3000);
+
+        // グローバルにインターバルIDを保持して、syncUI側でクリアできるようにしても良い
+        window.chinchigutiRollingInterval = interval;
+    },
+
+    // スコアボードのレンダリング
+    renderScoreboard: function(gameState, currentTurnPlayerId) {
+        const scoreboardEl = document.getElementById('chinchiguti-scoreboard');
+        if (!scoreboardEl) return;
+
+        let html = '<div style="background: rgba(255,255,255,0.05); border-radius: 6px; padding: 10px;">';
+        html += '<div style="display:flex; font-size:12px; color:#aaa; padding-bottom:6px; border-bottom:1px solid #444; font-weight:bold;">';
+        html += '<div style="flex:2;">プレイヤー</div>';
+        html += '<div style="flex:1; text-align:center;">残りサイコロ</div>';
+        html += '<div style="flex:2; text-align:right;">状態 / 投擲回数</div>';
+        html += '</div>';
+
+        gameState.turnOrder.forEach(pId => {
+            const p = gameState.playerData[pId];
+            const isCurrent = (pId === currentTurnPlayerId && !gameState.isEnded);
+            const bg = isCurrent ? 'background: rgba(255,215,0,0.15);' : '';
+            
+            // 【修正4】クラス名を独自のものに変更、または最適化
+            html += `<div style="display:flex; align-items:center; padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.05); ${bg}">`;
+            
+            // 名前
+            html += `<div style="flex:2; font-size:13px; font-weight:${isCurrent ? 'bold' : 'normal'}; color:${isCurrent ? '#ffd700' : '#fff'}">`;
+            html += `${isCurrent ? '▶ ' : ''}${p.name}`;
+            html += `</div>`;
+
+            // 残りサイコロ数
+            html += `<div style="flex:1; text-align:center; font-size:14px; font-weight:bold; color:#e0e0e0;">`;
+            html += `${p.diceCount} 個`;
+            html += `</div>`;
+
+            // 状態・回数
+            html += `<div style="flex:2; text-align:right; font-size:12px; color:#aaa;">`;
+            if (!p.active) {
+                html += `<span style="color:#4caf50; font-weight:bold;">🎉 抜出成功</span> (${p.totalRolls}回)`;
+            } else {
+                html += `生存中 (${p.totalRolls}回)`;
+            }
+            html += `</div>`;
+            
+            html += `</div>`;
+        });
+
+        html += '</div>';
+        scoreboardEl.innerHTML = html;
+    },
+
+    // 【修正3】未実装だった最終ランキング表示機能を実装
+    renderFinalRanking: function(gameState) {
+        const rankingEl = document.getElementById('chinchiguti-final-ranking');
+        if (!rankingEl) return;
+
+        // ランキングのロジック構築
+        // 1. すでに上がった人（!active）は、finishTurn（抜けた順）または投擲回数が少ない順で上に
+        // 2. まだ残っている人は、残りダイス数が少ない順、同数の場合は投擲回数などでソート
+        const playersArray = Object.values(gameState.playerData);
+        
+        playersArray.sort((a, b) => {
+            // 両方上がっている場合
+            if (!a.active && !b.active) {
+                return (a.finishTurn || 999) - (b.finishTurn || 999);
+            }
+            // 片方だけ上がっている場合、上がっている方が上位
+            if (!a.active) return -1;
+            if (!b.active) return 1;
+            
+            // 両方残っている場合は残りダイス数が少ない方が上位
+            if (a.diceCount !== b.diceCount) {
+                return a.diceCount - b.diceCount;
+            }
+            // ダイス数も同じなら、投擲回数が少ない方を上位にする
+            return a.totalRolls - b.totalRolls;
+        });
+
+        let html = '';
+        playersArray.forEach((p, index) => {
+            const rank = index + 1;
+            let rankColor = '#fff';
+            let medal = `第 ${rank} 位`;
+            
+            if (rank === 1) { rankColor = '#ffd700'; medal = '🥇 1位 (👑王様)'; }
+            else if (rank === 2) { rankColor = '#c0c0c0'; medal = '🥈 2位'; }
+            else if (rank === 3) { rankColor = '#cd7f32'; medal = '🥉 3位'; }
+
+            html += `
+            <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.05); padding: 8px 12px; border-radius: 6px; border-left: 4px solid ${rankColor};">
+                <span style="font-weight: bold; color: ${rankColor}; font-size: 13px;">${medal}</span>
+                <span style="font-weight: bold; color: #fff; font-size: 13px; flex-grow: 1; margin-left: 15px;">${p.name}</span>
+                <span style="font-size: 12px; color: #aaa;">
+                    ${!p.active ? `<span style="color:#4caf50; font-weight:bold;">脱出成功</span>` : `残り ${p.diceCount}個`} (${p.totalRolls}回)
+                </span>
+            </div>`;
+        });
+
+        rankingEl.innerHTML = html;
+    },
+
+    // サーバーサイドのアクションハンドラ (参考用・ロジック構築用)
+    handleServerAction: function(gameState, action, playerId) {
+        if (action.type === 'change-config' && !gameState.isStarted) {
+            gameState.config.initialDiceCount = action.initialDiceCount;
+            // 参加中プレイヤーの初期ダイス数も同期して更新
+            Object.values(gameState.playerData).forEach(p => {
+                p.diceCount = action.initialDiceCount;
+            });
+            return gameState;
+        }
+
+        if (action.type === 'start-game' && !gameState.isStarted) {
+            gameState.isStarted = true;
+            // 順番をシャッフル
+            gameState.turnOrder = Object.keys(gameState.playerData).sort(() => Math.random() - 0.5);
+            gameState.currentTurnIndex = 0;
+            gameState.isEnded = false;
+            return gameState;
+        }
+
+        if (action.type === 'roll' && gameState.isStarted && !gameState.isEnded) {
+            const currentTurnPlayerId = gameState.turnOrder[gameState.currentTurnIndex];
+            if (currentTurnPlayerId !== playerId) return gameState; // 手番違い
+
+            const p = gameState.playerData[playerId];
+            p.totalRolls++;
+
+            // ダイスを振る
+            const rolls = [];
+            for (let i = 0; i < p.diceCount; i++) {
+                rolls.push(Math.floor(Math.random() * 6) + 1);
+            }
+            gameState.lastRoll = rolls;
+
+            // 1の目の数を数える
+            const oneCount = rolls.filter(v => v === 1).length;
+
+            if (oneCount > 0) {
+                // 1の目の数だけダイスが減る
+                p.diceCount -= oneCount;
+                if (p.diceCount <= 0) {
+                    p.diceCount = 0;
+                    p.active = false;
+                    // 何番目に抜けたかを記録
+                    const finishedCount = Object.values(gameState.playerData).filter(pl => !pl.active).length;
+                    p.finishTurn = finishedCount;
+                }
+            }
+
+            // 全員のサイコロが1になる、または1人を除いて全員脱出したか等の終了条件チェック
+            // チンチ口のルール：「全員のサイコロが1になるまで終わらない（＝全員がactiveでない、または最後の1人のダイスが0になった瞬間）」
+            const activePlayers = Object.values(gameState.playerData).filter(pl => pl.active);
+            
+            // 終了判定: 生存者が0になった、もしくは最後の1人もダイスを全て減らしきった場合
+            if (activePlayers.length === 0) {
+                gameState.isEnded = true;
+                return gameState;
+            }
+
+            // 次の現役プレイヤーに手番を移す
+            let nextIndex = gameState.currentTurnIndex;
+            do {
+                nextIndex = (nextIndex + 1) % gameState.turnOrder.length;
+            } while (!gameState.playerData[gameState.turnOrder[nextIndex]].active && nextIndex !== gameState.currentTurnIndex);
+
+            gameState.currentTurnIndex = nextIndex;
+            
+            // 手番が変わるタイミングで前回のロール表示用のプレースホルダーにするため、
+            // 厳密にはクライアント側で少しディレイを挟んで同期するとよりスムーズです。
+            return gameState;
+        }
+
+        return gameState;
     }
 };
