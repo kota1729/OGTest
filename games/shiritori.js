@@ -169,7 +169,7 @@ GameRegistry.shiritori = {
         if(sortedPlayers.length < 2) { customAlert("2人以上のプレイヤーが必要です。"); return; }
         gameState.isStarted = true;
         gameState.gameType = 'shiritori';
-        gameState.roster = sortedPlayers.map(p => ({ accId: p.accId, name: p.name }));
+        gameState.roster = shufflePlayers(sortedPlayers.map(p => ({ accId: p.accId, name: p.name })));
         gameState.turnIndex = Math.floor(Math.random() * gameState.roster.length);
         this.lastKnownTurnIndex = gameState.turnIndex;
         gameState.history = [];

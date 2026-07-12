@@ -182,7 +182,7 @@ GameRegistry.chinchiguti = {
     hostGame: function() {
         if (sortedPlayers.length < 2) { customAlert("2人以上のプレイヤーが必要です。"); return; }
         gameState.isStarted = true; gameState.gameType = 'chinchiguti';
-        gameState.roster = sortedPlayers.map(p => ({ accId: p.accId, name: p.name }));
+        gameState.roster = shufflePlayers(sortedPlayers.map(p => ({ accId: p.accId, name: p.name })));
         gameState.turnIndex = Math.floor(Math.random() * gameState.roster.length);
         // 前回選んだサイコロ数があれば引き継ぐ。なければ3個から
         const prevCount = (gameState.chinchigutiConfig && gameState.chinchigutiConfig.diceCount) || 3;

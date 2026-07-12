@@ -102,7 +102,7 @@ GameRegistry.uno = {
     hostGame: function() {
         if(sortedPlayers.length < 2) { customAlert("2人以上のプレイヤーが必要です。"); return; }
         gameState.isStarted = true; gameState.gameType = 'uno';
-        gameState.roster = sortedPlayers.map(p => ({ accId: p.accId, name: p.name }));
+        gameState.roster = shufflePlayers(sortedPlayers.map(p => ({ accId: p.accId, name: p.name })));
         gameState.deck = this.createStandardUnoDeck(); gameState.discardPile = []; gameState.hands = {};
         gameState.turnIndex = Math.floor(Math.random() * gameState.roster.length); gameState.direction = 1; gameState.hasDrawnThisTurn = false;
         gameState.unoCalled = {}; gameState.pendingDrawCount = 0; gameState.pendingDrawType = null;

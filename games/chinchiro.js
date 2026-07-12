@@ -109,7 +109,7 @@ GameRegistry.chinchiro = {
     hostGame: function() {
         if (sortedPlayers.length < 2) { customAlert("2人以上のプレイヤーが必要です。"); return; }
         gameState.isStarted = true; gameState.gameType = 'chinchiro';
-        gameState.roster = sortedPlayers.map(p => ({ accId: p.accId, name: p.name }));
+        gameState.roster = shufflePlayers(sortedPlayers.map(p => ({ accId: p.accId, name: p.name })));
         gameState.turnIndex = Math.floor(Math.random() * gameState.roster.length);
         gameState.chinchiroResults = {};
         gameState.roster.forEach(p => {
