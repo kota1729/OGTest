@@ -19,9 +19,18 @@ GameRegistry.chinchiro = {
 
                 <div class="dice-stage" id="chinchiro-dice-stage">
                     <div class="chinchiro-dish">
-                        <div class="chinchiro-die" id="chinchiro-die-0">-</div>
-                        <div class="chinchiro-die" id="chinchiro-die-1">-</div>
-                        <div class="chinchiro-die" id="chinchiro-die-2">-</div>
+                        <div class="chinchiro-die unrolled" id="chinchiro-die-0">
+                            <div class="chinchiro-cube" id="chinchiro-cube-0"></div>
+                            <div class="chinchiro-die-placeholder">-</div>
+                        </div>
+                        <div class="chinchiro-die unrolled" id="chinchiro-die-1">
+                            <div class="chinchiro-cube" id="chinchiro-cube-1"></div>
+                            <div class="chinchiro-die-placeholder">-</div>
+                        </div>
+                        <div class="chinchiro-die unrolled" id="chinchiro-die-2">
+                            <div class="chinchiro-cube" id="chinchiro-cube-2"></div>
+                            <div class="chinchiro-die-placeholder">-</div>
+                        </div>
                         <div class="chinchiro-pinzoro-flash" id="chinchiro-pinzoro-flash"><span>🔥 ピンゾロ！！ 🔥</span></div>
                     </div>
                 </div>
@@ -63,10 +72,57 @@ GameRegistry.chinchiro = {
     rollAnimTimer: null,
     rollingInterval: null,
 
+    // 各面(1〜6)を正面に向けるために立方体へ加える回転角(対面の合計は7になる配置)
+    FACE_ROTATION: {
+        1: { x: 0,   y: 0 },
+        2: { x: -90, y: 0 },
+        3: { x: 0,   y: -90 },
+        4: { x: 0,   y: 90 },
+        5: { x: 90,  y: 0 },
+        6: { x: 0,   y: 180 }
+    },
+
+    // 3x3グリッド(1〜9)のうち、どの位置に目(ピップ)を置くか
+    PIP_LAYOUT: {
+        1: [5],
+        2: [1, 9],
+        3: [1, 5, 9],
+        4: [1, 3, 7, 9],
+        5: [1, 3, 5, 7, 9],
+        6: [1, 3, 4, 6, 7, 9]
+    },
+
     init: function() {
         this.isRolling = false;
         this.rollAnimTimer = null;
         this.rollingInterval = null;
+        [0, 1, 2].forEach(i => {
+            const cube = document.getElementById(`chinchiro-cube-${i}`);
+            if (cube) this.buildCube(cube);
+        });
+    },
+
+    // サイコロの1面分のHTML(ピップ配置込み)を作る
+    buildFaceHTML: function(n) {
+        const onSet = this.PIP_LAYOUT[n];
+        let dots = '';
+        for (let pos = 1; pos <= 9; pos++) {
+            dots += `<span class="chinchiro-pip${onSet.includes(pos) ? ' on' : ''}"></span>`;
+        }
+        return `<div class="chinchiro-pip-grid">${dots}</div>`;
+    },
+
+    // 立方体の6面をDOMに組み立てる(初回のみ)
+    buildCube: function(cubeEl) {
+        cubeEl.innerHTML = '';
+        [1, 2, 3, 4, 5, 6].forEach(n => {
+            const face = document.createElement('div');
+            face.className = `chinchiro-die-face cf-${n}`;
+            face.innerHTML = this.buildFaceHTML(n);
+            cubeEl.appendChild(face);
+        });
+        const rot = this.FACE_ROTATION[1];
+        cubeEl.style.transform = `rotateX(${rot.x}deg) rotateY(${rot.y}deg)`;
     },
 
     // UNOのDraw2/4のようなリアルタイム系イベント。他プレイヤーへ「振っている最中」の演出を伝える
@@ -81,11 +137,22 @@ GameRegistry.chinchiro = {
         return faces[Math.max(1, Math.min(6, n)) - 1];
     },
 
-    // サイコロの目を要素に反映する共通処理(「1」の目だけ赤色にする)
-    applyFace: function(el, n) {
+    // サイコロの目を要素に反映する共通処理。立方体を回転させて該当の面を正面に向ける
+    // fast=true の場合は転がっている最中の細かい切り替え用に素早く回転させる
+    applyFace: function(el, n, fast) {
         if (!el) return;
-        el.textContent = this.diceFace(n);
-        el.classList.toggle('die-one', n === 1);
+        el.classList.remove('unrolled');
+        const cube = el.querySelector('.chinchiro-cube');
+        if (!cube) return;
+        n = Math.max(1, Math.min(6, n));
+        const rot = this.FACE_ROTATION[n];
+        // 転がっている最中は素早く切り替え、結果が確定した時はゆっくり着地させる
+        cube.style.transition = fast
+            ? 'transform 0.1s linear'
+            : 'transform 0.4s cubic-bezier(.3,1.4,.4,1)';
+        // 転がっている最中は毎回1回転余分に回して、常に同じ方向へ勢いよく回り続けているように見せる
+        const spin = fast ? (Math.random() < 0.5 ? -360 : 360) : 0;
+        cube.style.transform = `rotateX(${rot.x + (fast ? spin : 0)}deg) rotateY(${rot.y + (fast ? spin : 0)}deg)`;
     },
 
     // 3つのサイコロの目から役を判定する
@@ -107,10 +174,14 @@ GameRegistry.chinchiro = {
     },
 
     hostGame: function() {
-        if (sortedPlayers.length < 2) { customAlert("2人以上のプレイヤーが必要です。"); return; }
+        if (sortedPlayers.length < 1) { customAlert("1人以上のプレイヤーが必要です。"); return; }
         gameState.isStarted = true; gameState.gameType = 'chinchiro';
-        gameState.roster = shufflePlayers(sortedPlayers.map(p => ({ accId: p.accId, name: p.name })));
-        gameState.turnIndex = Math.floor(Math.random() * gameState.roster.length);
+        let roster = shufflePlayers(sortedPlayers.map(p => ({ accId: p.accId, name: p.name })));
+        // 最初に番が回ってくる人を決めたら、その人がプレイヤー状況の一番上に来るよう並び替える
+        const startIdx = Math.floor(Math.random() * roster.length);
+        roster = roster.slice(startIdx).concat(roster.slice(0, startIdx));
+        gameState.roster = roster;
+        gameState.turnIndex = 0;
         gameState.chinchiroResults = {};
         gameState.roster.forEach(p => {
             gameState.chinchiroResults[p.accId] = { dice: [1, 1, 1], attempts: 0, label: '-', tier: -1, score: -1, done: false };
@@ -146,7 +217,7 @@ GameRegistry.chinchiro = {
 
         if (this.rollingInterval) clearInterval(this.rollingInterval);
         this.rollingInterval = setInterval(() => {
-            dieEls.forEach(el => { if (el) this.applyFace(el, 1 + Math.floor(Math.random() * 6)); });
+            dieEls.forEach(el => { if (el) this.applyFace(el, 1 + Math.floor(Math.random() * 6), true); });
         }, 90);
 
         setTimeout(() => {
@@ -348,8 +419,7 @@ GameRegistry.chinchiro = {
                 if (attemptsForDisplay > 0) {
                     this.applyFace(el, diceToShow[i]);
                 } else {
-                    el.textContent = '-';
-                    el.classList.remove('die-one');
+                    el.classList.add('unrolled');
                 }
             });
             handLabelEl.textContent = (activeResult && activeResult.attempts > 0) ? activeResult.label : '';

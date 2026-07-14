@@ -19,6 +19,7 @@ GameRegistry.uno = {
             <div id="uno-playing-area">
                 <div class="direction-indicator" id="uno-direction">順番：時計回り 🔄</div>
                 <div class="pending-draw-indicator" id="pending-draw-indicator" style="display:none;"></div>
+                <div class="uno-forced-draw-notice" id="uno-forced-draw-notice" style="display:none;"></div>
                 <div class="play-area">
                     <div style="text-align:center;">
                         <div style="font-size:0.65rem; margin-bottom:2px; color:#aaa;">山札</div>
@@ -106,7 +107,7 @@ GameRegistry.uno = {
         gameState.deck = this.createStandardUnoDeck(); gameState.discardPile = []; gameState.hands = {};
         gameState.turnIndex = Math.floor(Math.random() * gameState.roster.length); gameState.direction = 1; gameState.hasDrawnThisTurn = false;
         gameState.unoCalled = {}; gameState.pendingDrawCount = 0; gameState.pendingDrawType = null;
-        gameState.lastPlayedComboText = ""; gameState.isEnded = false; gameState.winner = null; gameState.winnerHandText = "";
+        gameState.lastPlayedComboText = ""; gameState.forcedDrawNoticeText = ""; gameState.isEnded = false; gameState.winner = null; gameState.winnerHandText = "";
 
         gameState.roster.forEach(p => {
             gameState.hands[p.accId] = [];
@@ -329,6 +330,7 @@ GameRegistry.uno = {
             customAlert(`重ねがけに対抗せずパスしたため、合計 ${totalPenaltyCards} 枚のペナルティを引き受けました。`);
             gameState.pendingDrawCount = 0; gameState.pendingDrawType = null;
         }
+        gameState.forcedDrawNoticeText = "";
         this.advanceTurn();
     },
 
@@ -362,6 +364,7 @@ GameRegistry.uno = {
             if (idx < orderedCards.length - 1) comboText += " → ";
         });
         gameState.lastPlayedComboText = comboText;
+        gameState.forcedDrawNoticeText = "";
 
         // 手札からの削除は、選択順を保ったままインデックスがずれないよう降順で行う
         const removalOrder = [...this.selectedIndices].sort((a, b) => b - a);
@@ -451,7 +454,7 @@ GameRegistry.uno = {
             this.reshuffleDeckFromDiscard();
             if (gameState.deck.length > 0) theirHand.push(gameState.deck.pop());
         }
-        gameState.lastPlayedComboText = `${gameState.lastPlayedComboText} / ${activePlayer.name}さんは残り1枚のカードで重ねがけを継続できなかったため、累積で${totalPenaltyCards}枚を自動的に引きました`;
+        gameState.forcedDrawNoticeText = `⚠️ ${activePlayer.name}さんは残り1枚のカードでは重ねがけを継続できなかったため、累積${totalPenaltyCards}枚を自動的に引きました`;
         gameState.pendingDrawCount = 0;
         gameState.pendingDrawType = null;
     },
@@ -563,6 +566,14 @@ GameRegistry.uno = {
             pendingIndicator.textContent = `🔥 現在［${typeLabel}］が累積［${gameState.pendingDrawCount}枚］積まれています！`;
         } else {
             pendingIndicator.style.display = 'none';
+        }
+
+        const forcedDrawNotice = document.getElementById('uno-forced-draw-notice');
+        if (gameState.forcedDrawNoticeText) {
+            forcedDrawNotice.style.display = 'block';
+            forcedDrawNotice.textContent = gameState.forcedDrawNoticeText;
+        } else {
+            forcedDrawNotice.style.display = 'none';
         }
 
         let unoNamesList = [];
